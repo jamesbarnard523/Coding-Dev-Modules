@@ -1,0 +1,187 @@
+#Move to your documents folder
+cd ~/Documents
+
+#Make a directory for this training/project
+mkdir metatax_training
+
+#Move to inside this project directory
+cd metatax_training
+
+#Make a directory called "fastqc"
+mkdir fastqc
+
+#Make a directory called "qiime"
+mkdir qiime
+
+#Get data- wget from server
+wget https://data.dimonaco.co.uk/QIIME_Workshop/data.zip
+
+#Unzip data
+unzip ./data
+
+#List your conda environments, to find the name of the multiqc/fastqc 
+conda env list
+
+#Activate conda environment, replace $$ with your actual environment name
+conda activate $$
+
+#Check fastqc and multiqc is working and you have the correct version
+fastqc -v
+multiqc -v
+
+#Run fastqc on all files in data dir- per file
+for file in ./data/*; do
+    fastqc "$file" -t 4 -o ./fastqc
+done
+
+#Run multiqc on all the fastqc produced files- collates all sample info
+multiqc ./fastqc -o ./fastqc
+
+#Deactivate the conda enviroment
+conda deactivate
+
+#List the contents of the directory, check your current working directory
+ls
+pwd
+
+
+#List your conda environments, to find the name of the qiime2 conda env
+conda env list
+
+#Activate conda environment, replace $$ with your actual environment name
+conda activate $$
+
+#Check qiime2 is working, and you have the correct version
+qiime info
+
+
+#Create the qiime manifest file
+echo -e "sampleID\tforward-absolute-filepath\treverse-absolute-filepath" > ./qiime/illumina-manifest.tsv
+
+#Check the manifest file contents
+less ./qiime/illumina-manifest.tsv
+
+#Populate the manifest files
+# Loop through each forward (R1) and reverse (R2) file
+for forward in data/*_R1.fastq.gz; do
+    sampleID=$(basename $forward _R1.fastq.gz)
+    reverse="data/${sampleID}_R2.fastq.gz"
+    if [[ -f "$reverse" ]]; then
+        echo -e "$sampleID\t$(realpath $forward)\t$(realpath $reverse)" >> ./qiime/illumina-manifest.tsv
+    else
+        echo "Warning: Reverse file for $sampleID not found. Skipping..." >&2
+    fi
+done
+
+#Check manifest file has been filled correctly 
+less ./qiime/illumina-manifest.tsv  
+less ./qiime/illumina-manifest.tsv | wc -l
+wc -l ./qiime/illumina-manifest.tsv
+
+#Import data, produce qiime2 compatible files
+qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path ./qiime/illumina-manifest.tsv \
+  --output-path ./qiime/demux.qza \
+  --input-format PairedEndFastqManifestPhred33V2
+
+#Validate the demux file
+qiime tools validate ./qiime/demux.qza
+
+#Export demux_summary
+qiime demux summarize --i-data qiime/demux.qza --o-visualization qiime/demux_summary
+
+#Denoise - set the trim and truncation lengths according to your data quality
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs ./qiime/demux.qza \
+  --p-trim-left-f 10 \
+  --p-trim-left-r 10 \
+  --p-trunc-len-f 240 \
+  --p-trunc-len-r 240 \
+  --p-n-threads 6 \
+  --o-representative-sequences ./qiime/rep-seqs.qza \
+  --o-denoising-stats ./qiime/denoising-stats.qza \
+  --o-table ./qiime/table.qza \
+  --verbose > ./qiime/denoising_error.txt 2>&1
+
+#Export the denoising stats
+qiime tools export --input-path ./qiime/denoising-stats.qza --output-path ./qiime/denoising-stats_export
+
+#Step n - A
+#Export summary of the feature table, produces biome
+qiime tools export --input-path ./qiime/table.qza --output-path ./qiime/table_export
+
+#Step n - B
+Convert to human-readable format
+biom convert -i qiime/table_export/feature-table.biom -o ./qiime/table_export/
+feature-table.tsv --to-tsv
+
+
+#Export visual summary of feature table
+qiime feature-table summarize --i-table qiime/table.qza --o-visualization qiime/table.qzv
+
+#Export visual summary of rep seqs table
+qiime feature-table tabulate-seqs --i-data qiime/rep-seqs.qza --o-visualization qiime/rep-seqs_tab.qzv
+
+
+#Download sklearn model from https://library.qiime2.org/data-resources#naive-bayes-classifiers
+wget https://data.qiime2.org/classifiers/sklearn-1.4.2/greengenes2/2024.09.backbone.v4.nb.sklearn-1.4.2.qza
+
+#Classify
+qiime feature-classifier classify-sklearn \
+  --i-classifier ./2024.09.backbone.v4.nb.sklearn-1.4.2.qza  \
+  --i-reads ./qiime/rep-seqs.qza \
+  --o-classification ./qiime/sklearn-taxonomy_GG2_V4_ASV.qza \
+  --p-n-jobs 6 \
+  --verbose
+
+#Metadata
+qiime metadata tabulate \
+  --m-input-file ./qiime/sklearn-taxonomy_GG2_V4_ASV.qza \
+  --o-visualization ./qiime/sklearn-taxonomy_GG2_V4_ASV.qzv
+
+#Create barcharts
+qiime taxa barplot \
+ --i-table ./qiime/table.qza \
+ --i-taxonomy ./qiime/sklearn-taxonomy_GG2_V4_ASV.qza \
+ --o-visualization ./qiime/sklearn-taxonomy_GG2_V4_ASV_Bar
+
+#Export the barcharts info
+unzip ./qiime/sklearn-taxonomy_GG2_V4_ASV_Bar.qzv -d ./qiime/taxonomy_output
+
+#Export representative sequences, will produce a fasta file
+qiime tools export \
+    --input-path ./qiime/rep-seqs.qza \
+    --output-path ./qiime/rep-seqs_export
+
+
+#Kelvin Code
+
+#Login to kelvin (qub on site option) and follow the on screen instructions
+ssh <username>@kelvin2.qub.ac.uk
+
+#ssh -p 55890 -i my-kelvin-key <username>@login.kelvin.alces.network
+
+#Make dir where you will store your script
+mkdir my_scripts
+
+#Move into the new directory
+cd my_scripts
+
+#wget submission script
+wget https://data.dimonaco.co.uk/QIIME_Workshop/metataxtraining_kelvin.sh
+
+#Edit the submission script 
+nano metataxtraining_kelvin.sh
+
+#Submit the script
+sbatch metataxtraining_kelvin.sh
+
+#Check your jobs
+squeue
+squeue -p k2-hipri
+squeue -u <username>
+
+#Use to inform your future jobs
+sacct -j <jobid> --format="JobID,jobname,NTasks,nodelist,CPUTime,ReqMem,MaxVMSize,Elapsed"
+
